@@ -488,7 +488,8 @@ main() {
   check_dependencies
   resolve_project
 
-  local project_encoded since
+  local project_encoded
+  local since
   project_encoded=$(url_encode_project "$PROJECT")
   since=$(calc_since "$PERIOD")
 
@@ -506,7 +507,8 @@ main() {
     echo "Found $pipeline_count pipeline(s)." >&2
   fi
 
-  local pipeline_ids jobs
+  local pipeline_ids
+  local jobs
   pipeline_ids=$(echo "$pipelines" | jq '[.[].id]')
   jobs=$(fetch_jobs "$project_encoded" "$pipeline_ids")
 
