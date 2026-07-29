@@ -1,20 +1,19 @@
 # gitlab-job-stats
 
-A shell script that generates a CI reliability report for a GitLab project. It
-shows pipeline and job success rates over a time window, with infrastructure
-failures distinguished from code failures.
+A Go tool that generates a CI reliability report for a GitLab project. It shows
+pipeline and job success rates over a time window, with infrastructure failures
+distinguished from code failures.
 
 ## Requirements
 
+- [Go](https://go.dev) 1.21+
 - [`glab`](https://gitlab.com/gitlab-org/cli) — authenticated (`glab auth login`)
-- [`jq`](https://jqlang.github.io/jq/) 1.6+
-- Bash 4.0+
 - macOS or Linux
 
 ## Usage
 
 ```sh
-./report.sh [group/project] [--period 1d|1w|1m] [--json]
+go run . [group/project] [--period 1d|1w|1m] [--json]
 ```
 
 ### Arguments
@@ -29,13 +28,13 @@ failures distinguished from code failures.
 
 ```sh
 # Report for the last week, project inferred from current git repo
-./report.sh
+go run .
 
 # Explicit project, last 24 hours
-./report.sh mygroup/myproject --period 1d
+go run . mygroup/myproject --period 1d
 
-# Last month, JSON output (pipe to jq, save to file, etc.)
-./report.sh mygroup/myproject --period 1m --json | jq .
+# Last month, JSON output
+go run . mygroup/myproject --period 1m --json | jq .
 ```
 
 ## Sample output
@@ -47,22 +46,22 @@ failures distinguished from code failures.
   ────────────────────────────────────────
 
   PIPELINES
-  Total                120
-  Success              95
-  Failed               25
-  Success rate         79.2%
+  Total                  120
+  Success                95
+  Failed                 25
+  Success rate           79.2%
 
   ────────────────────────────────────────
 
   JOBS
-  Total                840
-  Success              790
-  Failed               50
-  Success rate         94.0%
+  Total                  840
+  Success                790
+  Failed                 50
+  Success rate           94.0%
 
   JOB FAILURE BREAKDOWN
-  Code failures        38
-  Infra failures       12
+  Code failures          38
+  Infra failures         12
 
   ────────────────────────────────────────
 
@@ -73,6 +72,13 @@ failures distinguished from code failures.
   build-docker                             infra      8
   lint                                     code       7
 ```
+
+## Caching
+
+Job lists for completed pipelines are cached permanently in
+`~/.cache/gitlab-job-stats/<group_project>/`. On subsequent runs only
+in-progress or uncached pipelines hit the API, making re-runs over the same
+period much faster.
 
 ## Failure classification
 
@@ -98,6 +104,6 @@ Job failures are classified using GitLab's native `failure_reason` field.
 ## Notes
 
 - All branches are included; there is no per-branch filter.
-- For retried jobs, only the most recent attempt per job name per pipeline is counted.
+- Retried jobs: only the most recent attempt per job name per pipeline is counted.
 - Large projects with many pipelines will result in more API calls. GitLab rate
   limiting will surface naturally through `glab` error messages.
