@@ -166,8 +166,11 @@ fetch_pipelines() {
   local all_pipelines="[]"
 
   while true; do
+    [[ "$JSON_MODE" == false ]] && printf "\r  Fetching pipelines… page %-3s" "$page" >&2
+
     local response
     response=$(glab api "projects/${project_encoded}/pipelines?per_page=100&page=${page}&updated_after=${since}" 2>&1) || {
+      echo "" >&2
       echo "Error fetching pipelines (page $page): $response" >&2
       exit 1
     }
@@ -182,6 +185,8 @@ fetch_pipelines() {
     all_pipelines=$(echo "$all_pipelines $response" | jq -s '.[0] + .[1]')
     page=$((page + 1))
   done
+
+  [[ "$JSON_MODE" == false ]] && echo "" >&2
 
   echo "$all_pipelines"
 }
@@ -226,12 +231,30 @@ fetch_jobs() {
   local pipeline_ids_json="$2"  # JSON array of pipeline IDs
 
   local all_jobs="[]"
+  local total current=0
+  total=$(echo "$pipeline_ids_json" | jq 'length')
 
   while IFS= read -r pipeline_id; do
+    current=$((current + 1))
+    if [[ "$JSON_MODE" == false ]]; then
+      printf "\r  Fetching jobs… pipeline %-6s of %-6s (id: %s)" \
+        "$current" "$total" "$pipeline_id" >&2
+    fi
+
     local jobs
     jobs=$(fetch_pipeline_jobs "$project_encoded" "$pipeline_id")
+    local job_count
+    job_count=$(echo "$jobs" | jq 'length')
     all_jobs=$(echo "$all_jobs $jobs" | jq -s '.[0] + .[1]')
+
+    if [[ "$JSON_MODE" == false ]]; then
+      local running_total
+      running_total=$(echo "$all_jobs" | jq 'length')
+      printf " — %s job(s) fetched, %s total so far" "$job_count" "$running_total" >&2
+    fi
   done < <(echo "$pipeline_ids_json" | jq -r '.[]')
+
+  [[ "$JSON_MODE" == false ]] && echo "" >&2
 
   echo "$all_jobs"
 }
@@ -480,7 +503,7 @@ main() {
   pipeline_count=$(echo "$pipelines" | jq 'length')
 
   if [[ "$JSON_MODE" == false ]]; then
-    echo "Found $pipeline_count pipeline(s). Fetching jobs…" >&2
+    echo "Found $pipeline_count pipeline(s)." >&2
   fi
 
   local pipeline_ids jobs
