@@ -7,8 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+const fetchWorkers = 8
 
 // Pipeline represents a GitLab CI pipeline.
 type Pipeline struct {
@@ -84,40 +88,97 @@ func (c *gitLabClient) fetchPipelines(since time.Time, quiet bool) ([]Pipeline, 
 	return all, nil
 }
 
-// fetchAllJobs fetches jobs for every pipeline, using the cache for completed ones.
+// fetchAllJobs fetches jobs for every pipeline in parallel, using the cache for completed ones.
 func (c *gitLabClient) fetchAllJobs(pipelines []Pipeline, cache *Cache, quiet bool) ([]Job, error) {
 	total := len(pipelines)
-	var all []Job
 
-	for i, p := range pipelines {
-		if !quiet {
-			fmt.Fprintf(os.Stderr, "\r  Fetching jobs… pipeline %d of %d (id: %d)       ",
-				i+1, total, p.ID)
-		}
+	type result struct {
+		index  int
+		jobs   []Job
+		cached bool
+		err    error
+	}
 
-		jobs, cached, err := c.jobsForPipeline(p, cache)
-		if err != nil {
-			if !quiet {
-				fmt.Fprintln(os.Stderr)
+	work := make(chan int, total)
+	results := make(chan result, total)
+
+	var done atomic.Int64
+	var totalJobs atomic.Int64
+
+	// Progress printer — runs in its own goroutine, updates every 100ms.
+	stopProgress := make(chan struct{})
+	if !quiet {
+		go func() {
+			for {
+				select {
+				case <-stopProgress:
+					return
+				default:
+					fmt.Fprintf(os.Stderr, "\r  Fetching jobs… %d of %d pipelines done, %d jobs so far   ",
+						done.Load(), total, totalJobs.Load())
+					time.Sleep(100 * time.Millisecond)
+				}
 			}
-			return nil, fmt.Errorf("pipeline %d: %w", p.ID, err)
-		}
+		}()
+	}
 
-		all = append(all, jobs...)
+	// Enqueue all pipeline indices.
+	for i := range pipelines {
+		work <- i
+	}
+	close(work)
 
-		if !quiet {
-			src := "api"
-			if cached {
-				src = "cache"
+	// Launch worker pool.
+	var wg sync.WaitGroup
+	workers := fetchWorkers
+	if workers > total {
+		workers = total
+	}
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				jobs, cached, err := c.jobsForPipeline(pipelines[i], cache)
+				results <- result{index: i, jobs: jobs, cached: cached, err: err}
+				if err == nil {
+					done.Add(1)
+					totalJobs.Add(int64(len(jobs)))
+				}
 			}
-			fmt.Fprintf(os.Stderr, "— %d job(s) [%s], %d total so far", len(jobs), src, len(all))
+		}()
+	}
+
+	// Close results once all workers finish.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results in original order.
+	ordered := make([][]Job, total)
+	var firstErr error
+	for r := range results {
+		if r.err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("pipeline %d: %w", pipelines[r.index].ID, r.err)
 		}
+		ordered[r.index] = r.jobs
 	}
 
 	if !quiet {
-		fmt.Fprintln(os.Stderr)
+		close(stopProgress)
+		fmt.Fprintf(os.Stderr, "\r  Fetching jobs… %d of %d pipelines done, %d jobs so far   \n",
+			done.Load(), total, totalJobs.Load())
 	}
 
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	var all []Job
+	for _, jobs := range ordered {
+		all = append(all, jobs...)
+	}
 	return all, nil
 }
 
